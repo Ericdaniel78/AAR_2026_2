@@ -1,0 +1,147 @@
+---
+title: "Práctica 1: Simulación de Cartera de Autos – Datos SESA 2023"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Introducción
+
+Esta práctica tiene como objetivo construir una **cartera sintética** de seguros de automóviles a partir de datos oficiales del **Sistema Estadístico del Sector Asegurador (SESA)**.  Se parte del reporte **N1_SESA_Automóviles 2023** (actualizado al 9 de junio de 2025), el cual resume la información de primas y siniestros del ramo de autos.  A partir de ese reporte se extraen supuestos realistas de **frecuencia** y **severidad** de siniestros para simular el comportamiento de una cartera de 10 000 pólizas.
+
+# Supuestos de frecuencia y severidad
+
+El reporte incluye un cuadro denominado *“Vehículos asegurados, frecuencia y costo medio por cobertura”* (página 13), donde se presentan, para 2023, el número de vehículos asegurados, la frecuencia de siniestros (porcentaje de pólizas con siniestros) y el costo medio de los siniestros por cobertura【834583812092149†L3438-L3492】.  A continuación se resumen las cifras utilizadas en esta práctica:
+
+| Cobertura                     | Vehículos asegurados (2023) | Frecuencia (2023) | Costo medio (MX$) |
+|------------------------------|-----------------------------:|------------------:|------------------:|
+| **Daños Materiales (DM)**        | 10 972 512                | 15.90 %           | 22 023           |
+| **Responsabilidad Civil Total (RC)** | 13 069 877                | 8.50 %            | 17 147           |
+| **Robo Total**                   | 11 785 108                | 0.42 %            | 206 984         |
+| **Gastos Médicos**               | 12 279 106                | 2.40 %            | 4 864            |
+
+En este ejercicio sólo se consideran las coberturas de **Daños Materiales**, **Responsabilidad Civil** y **Robo**; la cobertura de gastos médicos se omite.  La frecuencia se calcula como el número de siniestros dividido entre el número de vehículos asegurados; el reporte no especifica si el costo medio está en pesos o en miles de pesos, por lo que se toman los valores tal cual【834583812092149†L3438-L3492】.
+
+# Parámetros de simulación
+
+```{r parametros}
+# Frecuencias anuales por póliza
+freq <- c(DM = 0.1590, RC = 0.0850, Robo = 0.0042)
+
+# Severidad media (MX$)
+mean_severity <- c(DM = 22023, RC = 17147, Robo = 206984)
+
+# Desviación logarítmica asumida para la distribución log-normal
+sigma <- 0.6
+
+# Cálculo de mu para la log-normal: mean = exp(mu + sigma^2/2)
+mu <- log(mean_severity) - (sigma^2)/2
+
+mu
+```
+
+Se asume que los montos de siniestro siguen una distribución log‑normal; el parámetro `mu` se calcula a partir de la media (`mean_severity`) y una desviación logarítmica (`sigma`) de 0.6.
+
+# Segmentación de riesgo
+
+Se generan 10 000 pólizas y se les asigna uno de tres segmentos de riesgo con las proporciones y multiplicadores siguientes:
+
+- **Bajo riesgo**: 30 % de las pólizas, multiplicador de 0.7 sobre la frecuencia base.
+- **Estándar**: 50 % de las pólizas, multiplicador de 1.0.
+- **Alto riesgo**: 20 % de las pólizas, multiplicador de 1.5.
+
+```{r segmentacion}
+set.seed(42)
+n_policies <- 10000
+segments <- c("Bajo riesgo", "Estándar", "Alto riesgo")
+weights  <- c(0.3, 0.5, 0.2)
+multiplier <- c(`Bajo riesgo` = 0.7, `Estándar` = 1.0, `Alto riesgo` = 1.5)
+
+# Asignar segmento a cada póliza
+segmento <- sample(segments, size = n_policies, replace = TRUE, prob = weights)
+
+# Crear data frame para las pólizas
+policies <- data.frame(segmento = segmento)
+```
+
+# Simulación de siniestros
+
+Para cada póliza se genera el número de siniestros por cobertura a partir de una distribución de Poisson con media igual a la frecuencia base multiplicada por el factor de segmento.  Si la póliza tiene siniestros, el monto pagado se obtiene sumando `n` valores generados de una log‑normal con parámetros `mu` y `sigma`.
+
+```{r simulacion}
+library(dplyr)
+
+for (cov in names(freq)) {
+  # Número de siniestros por póliza
+  lambda <- freq[cov]
+  policies[[paste0("num_siniestros_", cov)]] <- sapply(policies$segmento, function(seg) {
+    rpois(1, lambda * multiplier[seg])
+  })
+  
+  # Monto de siniestros
+  policies[[paste0("monto_siniestros_", cov)]] <- mapply(function(n) {
+    if (n > 0) sum(rlnorm(n, meanlog = mu[cov], sdlog = sigma)) else 0
+  }, n = policies[[paste0("num_siniestros_", cov)]])
+}
+
+# Calcular primas puras y comerciales
+margin <- 0.30
+for (cov in names(freq)) {
+  policies[[paste0("prima_pura_", cov)]] <- freq[cov] * mean_severity[cov] * multiplier[policies$segmento]
+  policies[[paste0("prima_comercial_", cov)]] <- policies[[paste0("prima_pura_", cov)]] * (1 + margin)
+}
+
+# Totales por póliza
+policies <- policies %>%
+  mutate(monto_siniestros_total = monto_siniestros_DM + monto_siniestros_RC + monto_siniestros_Robo,
+         prima_comercial_total = prima_comercial_DM + prima_comercial_RC + prima_comercial_Robo,
+         loss_ratio = monto_siniestros_total / prima_comercial_total)
+```
+
+# Resumen por segmento
+
+```{r resumen}
+summary_segmento <- policies %>%
+  group_by(segmento) %>%
+  summarise(
+    freq_DM = mean(num_siniestros_DM),
+    freq_RC = mean(num_siniestros_RC),
+    freq_Robo = mean(num_siniestros_Robo),
+    prima_media = mean(prima_comercial_total),
+    perdida_media = mean(monto_siniestros_total),
+    loss_ratio = mean(loss_ratio)
+  )
+
+summary_segmento
+```
+
+El resumen anterior muestra, para cada segmento de riesgo, el número promedio de siniestros por cobertura, la prima comercial media, el monto de siniestros medio y la razón de siniestralidad.  Se observa que la **razón de siniestralidad** está en torno a 0.8 (80 %), ligeramente por encima del 75 % de referencia; ajustando las frecuencias o incrementando el margen de gastos podría alcanzarse el valor deseado.
+
+# Exportación de la cartera simulada
+
+Finalmente, se exporta la base de datos simulada a un archivo CSV.
+
+```{r export}
+output_path <- "cartera_autos_simulada_realista.csv"
+selected_cols <- c("segmento",
+                   "num_siniestros_DM", "num_siniestros_RC", "num_siniestros_Robo",
+                   "monto_siniestros_DM", "monto_siniestros_RC", "monto_siniestros_Robo",
+                   "prima_pura_DM", "prima_pura_RC", "prima_pura_Robo",
+                   "prima_comercial_DM", "prima_comercial_RC", "prima_comercial_Robo",
+                   "prima_comercial_total", "loss_ratio")
+
+write.csv(policies[selected_cols], file = output_path, row.names = FALSE)
+output_path
+```
+
+# Conclusiones
+
+- Los supuestos de **frecuencia** y **costo medio** por cobertura se obtuvieron del reporte oficial *N1_SESA_Automóviles 2023*【834583812092149†L3438-L3492】.  
+- Se modeló la severidad de los siniestros mediante una distribución log‑normal con desviación logarítmica de 0.6.  
+- La cartera se dividió en tres segmentos de riesgo con multiplicadores sobre la frecuencia base para reflejar distintos niveles de riesgo.  
+- La razón de siniestralidad promedio obtenida es cercana a 0.8; los valores pueden calibrarse modificando las frecuencias o el margen de gastos.
+
+El archivo `cartera_autos_simulada_realista.csv` contiene el detalle de cada póliza simulada.
