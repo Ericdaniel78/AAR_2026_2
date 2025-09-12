@@ -6,3 +6,7 @@ Repoitorio de códigos para la clase AAR de la Factultad de Ciencias
 practica_01: entrega 13/09/2025
 
 Solución a la práctica 1: Simulación de siniestros de autos (practica_01_sol)
+
+## Intermedio 1:
+
+Revisar las implicaciones que tienen los supesutos de la clase 1.
