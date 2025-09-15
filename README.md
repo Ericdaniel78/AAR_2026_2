@@ -7,6 +7,8 @@ practica_01: entrega 13/09/2025
 
 Solución a la práctica 1: Simulación de siniestros de autos (practica_01_sol)
 
-## Intermedio 1:
+## Entregable 2:
 
-Revisar las implicaciones que tienen los supesutos de la clase 1.
+Tarea 2 instrucciones detalladas en teroi/CLAS_0 1/README
+
+Entrega: 20/09/2025
