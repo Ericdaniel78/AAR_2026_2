@@ -1,7 +1,7 @@
 # Guía de Práctica - Pricing en Seguros de Autos
 
 En esta práctica, revisaremos los códigos proporcionados y reflexionaremos sobre los supuestos y la teoría detrás del pricing actuarial.  
-La entrega será el **20 de septimbre de 2025**, en formato `.ipynb` o `.Rmd`, con las respuestas, tablas y gráficas solicitadas.
+La entrega será el **24 de septimbre de 2025**, en formato `.ipynb` o `.Rmd`, con las respuestas, tablas y gráficas solicitadas.
 
 ---
 

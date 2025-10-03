@@ -12,3 +12,9 @@ Solución a la práctica 1: Simulación de siniestros de autos (practica_01_sol)
 Tarea 2 instrucciones detalladas en teroi/CLAS_0 1/README
 
 Entrega: 24/09/2025
+
+## Entregable 3:
+
+Practica 3: Modelación con GLM
+
+Entrega: 08/10/2025
