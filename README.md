@@ -17,4 +17,9 @@ Entrega: 24/09/2025
 
 Practica 3: Modelación con GLM
 
-Entrega: 08/10/2025
+Entrega: 11/10/2025
+
+## Entregable 4:
+
+Práctica 4: Reservas Técnicas (IBNR y RRC)
+Entrega: 26/11/2025
