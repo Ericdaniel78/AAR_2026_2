@@ -23,3 +23,7 @@ Entrega: 11/10/2025
 
 Práctica 4: Reservas Técnicas (IBNR y RRC)
 Entrega: 26/11/2025
+
+## Proyecto final:
+
+Presentaciones comienzan el lunes 8/12/2025 al 12/12/2025

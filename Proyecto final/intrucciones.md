@@ -87,7 +87,7 @@ Cada equipo debe presentar un **producto actuarial completo**, basado en las 4 p
 - Bibliografía relevante.
 
 ## 5. Evaluación entre Pares (20%)
-Cada alumno deberá evaluar a sus compañeros respondiendo:
+Cada equipo deberá evaluar a sus compañeros respondiendo:
 
 1. ¿Qué entendiste del tema presentado?  
 2. ¿El material usado fue adecuado?  
