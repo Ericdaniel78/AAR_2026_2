@@ -7,3 +7,6 @@ practica_01: entrega 28/02/2025
 
 Solución a la práctica 1: Simulación de siniestros de autos (practica_01_sol)
 
+## Entregable 2:
+
+practica_02: entrega 15/04/2025
