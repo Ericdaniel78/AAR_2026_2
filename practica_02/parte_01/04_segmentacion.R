@@ -63,7 +63,6 @@ ggplot(data_pred1, aes(x = EDAD_CONDUCTOR, y = yp0)) +
               aes(x = EDAD_CONDUCTOR, y = yp0), color = "red", size = 3, shape = 4)+
   geom_hline(yintercept = tasa, color = "blue")+
   labs(x = "Edad del conductor", y = "Frecuencia") +
-  ylim(0.04,0.10)+
   theme_minimal()
 
 cat("Frequencia =", data_pred1$yp0[k],"Intervalor de confianza",data_pred1$yp2[k],data_pred1$yp1[k])
@@ -93,7 +92,6 @@ ggplot(data_pred2, aes(x = EDAD_CONDUCTOR, y = yp0)) +
               aes(x = EDAD_CONDUCTOR, y = yp0), color = "red", size = 3, shape = 4)+
   geom_hline(yintercept = tasa, color = "blue")+
   labs(x = "Edad del conductor", y = "Frecuencia") +
-  ylim(0.04,0.10)+
   theme_minimal()
 
 
