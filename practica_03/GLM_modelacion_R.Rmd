@@ -1,0 +1,556 @@
+---
+title: "Práctica 3 – GLMs en Pricing (R)"
+subtitle: "Administración Actuarial del Riesgo · Facultad de Ciencias, UNAM"
+author: "Curso AAR 2026-2"
+date: "`r format(Sys.Date(), '%d de %B de %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    theme: flatly
+    highlight: tango
+    df_print: paged
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  fig.width = 7,
+  fig.height = 4.5,
+  out.width = "85%"
+)
+```
+
+# Introducción
+
+**Objetivo:** Simular una cartera (autos como ejemplo), explorar los datos, ajustar modelos GLM de **frecuencia** y **severidad**, calcular la **prima pura** por póliza y evaluar la segmentación (**Gini**) y la interpretabilidad (**predicciones parciales**).
+
+En este cuaderno aprenderás a modelar la frecuencia y severidad de siniestros para un portafolio de autos usando Modelos Lineales Generalizados (GLMs) en **R**.
+
+> **Notas:**
+>
+> - Los comentarios y conclusiones incluyen fórmulas para justificar las decisiones de modelado. Las referencias teóricas se basan en datos de seguros reales.
+> - Deberán usar las variables que encontraron en SESA de la práctica 1.
+
+## Paquetes requeridos
+
+```{r paquetes}
+# Paquetes para manipulación, modelado y visualización
+library(dplyr)        # manipulación de datos
+library(tidyr)        # reorganización
+library(ggplot2)      # gráficos
+library(MASS)         # glm.nb (binomial negativa) y fitdistr (Weibull)
+library(broom)        # tidy() para tablas de coeficientes
+library(knitr)        # kable para tablas
+```
+
+# Paso 0 – Simulación de una cartera
+
+## Seguro de Autos
+
+Supondremos que cada póliza tiene una **exposición** (en años), características del conductor y del vehículo, y un número de siniestros y monto de reclamaciones generado a partir de distribuciones paramétricas.
+
+1. **Características de riesgo:** simularemos la edad del conductor (`DrivAge`), la antigüedad del vehículo (`VehAge`), la potencia (`VehPower`) y el tipo de área (`Area`).
+2. **Frecuencia:** supondremos que el número de siniestros $N$ sigue una distribución Poisson con media
+
+$$
+\lambda_i = \exp(\beta_0 + \beta_1 \, \text{Age}_i + \beta_2 \, \text{VehAge}_i + \beta_3 \, \text{Area}_i) \times \text{Exposure}_i
+$$
+
+3. **Severidad:** si una póliza tiene siniestros ($N > 0$), cada siniestro tiene un importe generado de una distribución Gamma con forma y escala fijas. La severidad media por póliza se calcula como `ClaimAmount / N`.
+
+## Simulación
+
+El siguiente código crea un `data.frame` simulando 10,000 pólizas conforme a estas hipótesis. Fijamos la semilla con `set.seed(42)` para que la simulación sea reproducible.
+
+```{r semilla}
+# Semilla fija para reproducibilidad
+set.seed(42)
+
+# Número de pólizas a simular
+n <- 10000
+```
+
+Simulamos la **exposición** de cada póliza (fracción del año durante la cual la póliza está vigente, entre 0.5 y 1.0) y se simulan características aleatorias de las pólizas.
+
+```{r simulacion_riesgo}
+# Exposición (entre 0.5 y 1 año)
+Exposure <- runif(n, min = 0.5, max = 1.0)
+
+# Variables de riesgo
+DrivAge  <- sample(18:74, size = n, replace = TRUE)
+VehAge   <- sample(0:19,  size = n, replace = TRUE)
+VehPower <- sample(4:12,  size = n, replace = TRUE)   # categorías 4–12
+Area     <- sample(c("A","B","C","D","E","F"),
+                   size = n, replace = TRUE,
+                   prob = c(0.20, 0.20, 0.20, 0.15, 0.15, 0.10))
+```
+
+### Coeficientes y simulación de la frecuencia
+
+- **Coeficientes del modelo de frecuencia:** asignamos valores arbitrarios (`beta0`, `beta_age`, `beta_veh`, `beta_area`) que controlan la relación entre cada variable y el logaritmo de la tasa de siniestros.
+- **Tasa de siniestros (`mu_freq`):** calculamos el predictor lineal `eta` y lo transformamos con `exp(eta)` para obtener un valor positivo. Multiplicamos por la exposición para obtener el número esperado de siniestros por póliza.
+- **Número de siniestros:** `rpois(n, lambda = mu_freq)` genera conteos siguiendo Poisson.
+
+```{r simulacion_frecuencia}
+# Coeficientes para el modelo Poisson de frecuencia
+beta0     <- -3.0
+beta_age  <-  0.015   # incremento por cada año del conductor
+beta_veh  <- -0.02    # vehículos viejos tienen menos siniestros
+beta_area <- c(A = 0.0, B = 0.1, C = 0.2, D = 0.3, E = 0.4, F = 0.5)
+
+# Predictor lineal y tasa de siniestros
+eta     <- beta0 + beta_age * DrivAge + beta_veh * VehAge + beta_area[Area]
+lam     <- exp(eta)
+mu_freq <- lam * Exposure
+
+# Número de siniestros por póliza
+N <- rpois(n, lambda = mu_freq)
+
+cat(sprintf("Frecuencia media teórica:  %.4f siniestros por póliza\n", mean(mu_freq)))
+cat(sprintf("Frecuencia media simulada: %.4f siniestros por póliza\n", mean(N)))
+```
+
+Estos parámetros determinan la relación logarítmica entre las covariables y la tasa de siniestros:
+$$
+\lambda_i = \exp(\beta_i)\, \text{Exposure}_i
+$$
+
+Por ejemplo, `beta_age = 0.015` implica un aumento relativo de $e^{0.015} \approx 1.015$ veces la frecuencia por cada año adicional del conductor.
+
+### Simulación de la severidad
+
+Para las pólizas con al menos un siniestro ($N > 0$):
+
+$$
+Y_{ij}\mid N_i>0 \sim \text{Gamma}(\mu_i,\phi),\quad \log\mu_i = \alpha_0 + \alpha_1\,\text{VehPower}_i + \sum_k \alpha_k^{(Area)}\,\mathbf{1}\{Area=k\}
+$$
+
+```{r simulacion_severidad}
+# Coeficientes del modelo de severidad
+alpha0     <- 8.0
+a_power    <- 0.03
+alpha_area <- c(A = 0.00, B = 0.02, C = 0.06, D = 0.08, E = 0.12, F = 0.15)
+phi        <- 1.5  # parámetro de dispersión Gamma (forma ~ 1/phi)
+
+# Media de severidad por póliza
+sev_mu <- exp(alpha0 + a_power * VehPower + alpha_area[Area])
+
+# Generar severidades por póliza: suma de los N siniestros
+claim_amount <- numeric(n)
+for (i in seq_len(n)) {
+  if (N[i] > 0) {
+    # En R: rgamma(n, shape, scale)
+    y <- rgamma(N[i], shape = 1 / phi, scale = sev_mu[i] * phi)
+    claim_amount[i] <- sum(y)
+  }
+}
+
+cat(sprintf("Severidad media teórica:  %.2f unidades monetarias\n", mean(sev_mu)))
+cat(sprintf("Severidad media simulada: %.2f unidades monetarias\n",
+            mean(claim_amount[N > 0])))
+```
+
+Este paso te permite experimentar con los parámetros y entender cómo influyen en la frecuencia y severidad. Cuando utilices una cartera real, sustituye esta simulación por la carga de tus propios datos (por ejemplo, con `read.csv`).
+
+### Construcción del DataFrame
+
+Construimos un `data.frame` con todas las variables simuladas: identificador de póliza, exposición, variables de riesgo, número de siniestros y montos de reclamación.
+
+```{r construir_df}
+df <- data.frame(
+  IDpol       = seq_len(n),
+  Exposure    = Exposure,
+  DrivAge     = DrivAge,
+  VehAge      = VehAge,
+  VehPower    = factor(VehPower, levels = 4:12),  # categórica
+  Area        = factor(Area, levels = c("A","B","C","D","E","F")),  # con orden
+  ClaimNb     = N,
+  ClaimAmount = claim_amount
+)
+
+head(df)
+```
+
+# Paso 1 – Análisis exploratorio (EDA)
+
+```{r eda_exposicion}
+# Proporción de exposición por Area
+expo_by_area <- df %>%
+  group_by(Area) %>%
+  summarise(Expo = sum(Exposure), .groups = "drop") %>%
+  mutate(Prop = Expo / sum(Expo))
+
+ggplot(expo_by_area, aes(x = Area, y = Prop, fill = Area)) +
+  geom_col() +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Proporción de exposición por Area",
+       x = "Area", y = "Proporción") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r eda_tasa_area}
+# Tasa de frecuencia por Area con IC aproximado
+g_area <- df %>%
+  group_by(Area) %>%
+  summarise(Claims = sum(ClaimNb),
+            Expo   = sum(Exposure), .groups = "drop") %>%
+  mutate(rate = Claims / Expo,
+         se   = sqrt(rate / pmax(Expo, 1e-9)),
+         lwr  = rate - 1.96 * se,
+         upr  = rate + 1.96 * se)
+
+ggplot(g_area, aes(x = Area, y = rate, fill = Area)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = lwr, ymax = upr), width = 0.2) +
+  labs(title = "Tasa de frecuencia por Area (IC ~95%)",
+       x = "Area", y = "Claims por unidad de exposición") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r eda_bandas_edad}
+# Bandas de DrivAge
+df <- df %>%
+  mutate(DrivAgeBand = cut(DrivAge,
+                           breaks = c(18, 25, 35, 45, 55, 65, 75),
+                           right = FALSE,
+                           include.lowest = TRUE))
+
+rate_age <- df %>%
+  group_by(DrivAgeBand) %>%
+  summarise(rate = sum(ClaimNb) / sum(Exposure), .groups = "drop")
+
+ggplot(rate_age, aes(x = DrivAgeBand, y = rate, group = 1)) +
+  geom_line(color = "steelblue", linewidth = 1) +
+  geom_point(size = 3, color = "steelblue") +
+  labs(title = "Tasa por bandas de edad del conductor",
+       x = "Banda de DrivAge", y = "Claims / Exposición") +
+  theme_minimal()
+```
+
+```{r eda_severidad_power}
+# Severidad promedio por VehPower (solo pólizas con siniestro)
+sev_pw <- df %>%
+  filter(ClaimNb > 0) %>%
+  group_by(VehPower) %>%
+  summarise(SevProm = sum(ClaimAmount) / sum(ClaimNb), .groups = "drop")
+
+ggplot(sev_pw, aes(x = VehPower, y = SevProm, group = 1)) +
+  geom_line(color = "darkorange", linewidth = 1) +
+  geom_point(size = 3, color = "darkorange") +
+  labs(title = "Severidad promedio por potencia (VehPower)",
+       x = "VehPower", y = "Monto promedio por siniestro") +
+  theme_minimal()
+```
+
+**Interpretación**
+
+- Si la tasa aumenta en bandas jóvenes de `DrivAge`, es consistente con $\beta_1 > 0$.
+- `Area` escalonado en tasa/severidad es coherente con los parámetros simulados.
+- En severidad, el crecimiento con `VehPower` apoya $\alpha_1 > 0$.
+
+# Paso 2 – Modelado de la frecuencia
+
+La **frecuencia** se define como el número de siniestros por unidad de exposición:
+
+$$
+\text{Frequency}_i = \frac{\text{ClaimNb}_i}{\text{Exposure}_i}
+$$
+
+## Modelo Poisson con offset
+
+Ajustamos un **GLM Poisson** con enlace log. Incluimos `log(Exposure)` como **offset** para tener en cuenta la exposición de cada póliza:
+
+$$
+N_i \sim \text{Poisson}(\mu_i),\quad \log \mu_i = \log(\text{Exposure}_i) + X_i\beta
+$$
+
+En R, la categoría de referencia para un `factor` se controla con el orden de los niveles (el primer nivel es la referencia, en este caso `"A"` para `Area`). La variable `VehPower` es categórica con referencia `"4"`.
+
+```{r modelo_poisson}
+formula_freq <- ClaimNb ~ DrivAge + VehAge + Area
+
+model_pois <- glm(formula_freq,
+                  data   = df,
+                  family = poisson(link = "log"),
+                  offset = log(Exposure))
+
+summary(model_pois)
+```
+
+Este modelo estima los parámetros $\beta$ de la ecuación:
+
+$$
+\log(\mathbb{E}[\text{ClaimNb}_i]) = \log(\text{Exposure}_i) + \beta_0 + \beta_1\,\text{DrivAge}_i + \beta_2\,\text{VehAge}_i + \beta_3\,\text{Area}_i
+$$
+
+Los coeficientes estimados se pueden comparar con los valores utilizados en la simulación para validar el modelo. Recordemos que $e^{\beta_j}$ es el **multiplicador** de tasa frente a la categoría de referencia.
+
+```{r tabla_coef_pois}
+broom::tidy(model_pois) %>%
+  mutate(exp_coef = exp(estimate)) %>%
+  kable(digits = 4, caption = "Coeficientes del GLM Poisson y multiplicadores")
+```
+
+## Diagnóstico de sobredispersión
+
+Calculamos las **medidas de sobredispersión**: la relación varianza/media de la frecuencia y la relación deviance/df. Si el cociente está cerca de 1, el supuesto Poisson es razonable.
+
+```{r sobredispersion}
+freq <- df$ClaimNb / df$Exposure
+var_mean_ratio <- var(freq) / mean(freq)
+
+deviance_df <- model_pois$deviance / model_pois$df.residual
+
+cat(sprintf("Varianza/Media: %.2f\n", var_mean_ratio))
+cat(sprintf("Deviance/df:    %.2f\n", deviance_df))
+```
+
+## Modelo Binomial Negativa
+
+Como alternativa, ajustamos un GLM **Binomial Negativa** (que admite sobredispersión):
+
+```{r modelo_nb}
+model_nb <- MASS::glm.nb(
+  ClaimNb ~ DrivAge + VehAge + Area + offset(log(Exposure)),
+  data = df
+)
+
+summary(model_nb)
+```
+
+## Comparación AIC
+
+```{r aic_freq}
+cat("AIC Poisson vs NB:\n")
+cat(sprintf("  Poisson: %.4f\n", AIC(model_pois)))
+cat(sprintf("  NB:      %.4f\n", AIC(model_nb)))
+```
+
+El modelo con AIC más bajo se considera preferible; en la simulación es probable que el Poisson tenga un AIC ligeramente menor debido a la forma en que se generaron los datos. **Adecuación del modelo de frecuencia:** el modelo Poisson es apropiado cuando la varianza es similar a la media; si la sobredispersión fuera fuerte, la Binomial Negativa se justifica.
+
+# Paso 3 – Modelado de la severidad
+
+La **severidad** corresponde al monto promedio por siniestro:
+
+$$
+\text{Severity}_i = \frac{\text{ClaimAmount}_i}{\max\{\text{ClaimNb}_i, 1\}}
+$$
+
+Según la teoría actuarial, la severidad suele seguir una distribución **Gamma** con enlace log. Filtramos las pólizas con montos positivos y utilizamos el número de siniestros como peso para reflejar que una póliza con varios reclamos aporta más información.
+
+```{r filtro_severidad}
+sev <- df %>%
+  filter(ClaimAmount > 0) %>%
+  mutate(Severity = ClaimAmount / ClaimNb)
+
+head(sev)
+```
+
+La nueva tabla `sev` contiene únicamente las pólizas con siniestros y una columna `Severity` que representa el coste medio por siniestro.
+
+## Modelo Gamma completo
+
+```{r modelo_gamma}
+formula_sev <- Severity ~ VehPower + VehAge + DrivAge + Area
+
+model_gamma <- glm(formula_sev,
+                   data    = sev,
+                   family  = Gamma(link = "log"),
+                   weights = ClaimNb)
+
+summary(model_gamma)
+```
+
+## Tratamiento de siniestros grandes (recorte al percentil 95)
+
+El modelo Gamma es sensible a los siniestros extremos; al recortar las reclamaciones por encima del percentil 95 se obtiene un modelo más robusto.
+
+```{r modelo_gamma_recortado}
+threshold <- quantile(sev$ClaimAmount, probs = 0.95)
+sev_trim  <- sev %>% filter(ClaimAmount <= threshold)
+
+model_gamma_trim <- glm(formula_sev,
+                        data    = sev_trim,
+                        family  = Gamma(link = "log"),
+                        weights = ClaimNb)
+
+cat(sprintf("Umbral del 95%% para grandes siniestros: %.2f\n", threshold))
+summary(model_gamma_trim)
+```
+
+## Ajuste de una distribución Weibull
+
+Como contraste con el modelo Gamma, ajustamos una **distribución Weibull** a la severidad usando `MASS::fitdistr`. La Weibull no incorpora covariables, por lo que la severidad predicha es constante para todas las pólizas.
+
+```{r ajuste_weibull}
+sev_values <- sev$Severity
+
+fit_weib <- MASS::fitdistr(sev_values, densfun = "weibull")
+shape_weib <- fit_weib$estimate["shape"]
+scale_weib <- fit_weib$estimate["scale"]
+
+cat(sprintf("Parámetros Weibull: shape = %.3f, scale = %.1f\n",
+            shape_weib, scale_weib))
+
+# Media de la Weibull: scale * Gamma(1 + 1/shape)
+weibull_mean <- scale_weib * gamma(1 + 1 / shape_weib)
+cat(sprintf("Severidad media estimada (Weibull): %.4f\n", weibull_mean))
+
+# Predicción de severidad constante para cada póliza
+sev_pred_weibull <- rep(weibull_mean, nrow(df))
+```
+
+El ajuste de la Weibull produce parámetros de forma y escala que resumen la distribución de la severidad simulada. La comparación entre la media Gamma y la media Weibull ayuda a evaluar la adecuación de las distribuciones.
+
+## Comparación AIC del Gamma completo y recortado
+
+```{r aic_severidad}
+cat(sprintf("AIC modelo completo:  %.4f\n", AIC(model_gamma)))
+cat(sprintf("AIC modelo recortado: %.4f\n", AIC(model_gamma_trim)))
+```
+
+Si el modelo recortado tiene menor AIC, es preferible. **Tratamiento de la severidad:** al recortar las reclamaciones por encima del percentil 95 se obtiene un modelo más robusto. En un análisis real se podrían modelar las pérdidas grandes con un submodelo específico.
+
+# Paso 4 – Cálculo de la prima pura
+
+Una vez ajustados los modelos de frecuencia y severidad, la prima pura esperada para cada póliza se calcula como el producto de las predicciones:
+
+$$
+\pi_i = \hat{\lambda}_i \times \hat{\mu}_i
+$$
+
+A continuación combinamos las estimaciones de frecuencia (usando el modelo Binomial Negativa) y de severidad para obtener la prima pura predicha.
+
+```{r prima_pura}
+# Predicciones de frecuencia (NB) — incluye el offset automáticamente
+freq_pred_full <- predict(model_nb, newdata = df, type = "response")
+
+# Predicciones de severidad (Gamma)
+sev_pred_full <- predict(model_gamma, newdata = df, type = "response")
+
+# Prima pura por póliza
+df$PurePremium <- freq_pred_full * sev_pred_full
+
+head(df[, c("IDpol", "PurePremium")])
+```
+
+## Índice de Gini
+
+El **índice de Gini** compara la clasificación de las pólizas según la prima pura con el coste real por exposición; un valor más alto (en valor absoluto) indica mejor capacidad de discriminación del modelo.
+
+```{r gini}
+gini <- function(actual, pred) {
+  ord <- order(pred)
+  actual_sorted <- actual[ord]
+  total <- sum(actual_sorted)
+  cum_actual <- cumsum(actual_sorted)
+  n <- length(actual)
+  gini_sum <- sum(cum_actual) / total
+  gini_sum <- gini_sum - (n + 1) / 2
+  gini_sum / n
+}
+
+actual_cost_per_exposure <- df$ClaimAmount / df$Exposure
+gini_pure <- gini(actual_cost_per_exposure, df$PurePremium)
+cat(sprintf("Índice de Gini para la prima pura: %.4f\n", gini_pure))
+```
+
+## Predicciones parciales por edad del conductor
+
+Las **predicciones parciales** ilustran cómo varía la prima pura con la edad del conductor manteniendo las demás variables fijas (en sus valores típicos / referencia).
+
+```{r predicciones_parciales}
+age_grid <- seq(18, 75, by = 10)
+
+partial_df <- data.frame(
+  DrivAge  = age_grid,
+  VehAge   = median(df$VehAge),
+  VehPower = factor(levels(df$VehPower)[1], levels = levels(df$VehPower)),
+  Area     = factor(levels(df$Area)[1],     levels = levels(df$Area)),
+  Exposure = 1.0
+)
+
+# Frecuencia parcial con NB (offset = log(1) = 0, así que no afecta)
+partial_freq <- predict(model_nb, newdata = partial_df, type = "response")
+
+# Severidad: para simplificar, usamos la media Weibull (constante)
+partial_pure <- partial_freq * weibull_mean
+
+partial_table <- data.frame(
+  DrivAge              = age_grid,
+  PredictedPurePremium = partial_pure
+)
+
+kable(partial_table, digits = 2,
+      caption = "Prima pura predicha por edad del conductor")
+```
+
+```{r grafico_parcial}
+ggplot(partial_table, aes(x = DrivAge, y = PredictedPurePremium)) +
+  geom_line(color = "steelblue", linewidth = 1) +
+  geom_point(size = 3, color = "steelblue") +
+  labs(title = "Prima pura predicha vs. edad del conductor",
+       x = "DrivAge", y = "Prima pura predicha") +
+  theme_minimal()
+```
+
+## Factor de tarifa multiplicativo
+
+Calculamos un **factor de tarifa multiplicativo** dividiendo la prima pura de cada póliza por la prima de una póliza base; este factor permite construir tarifas relativas para segmentos de riesgo.
+
+```{r factor_multiplicativo}
+baseline_df <- data.frame(
+  DrivAge  = median(df$DrivAge),
+  VehAge   = median(df$VehAge),
+  VehPower = factor(levels(df$VehPower)[1], levels = levels(df$VehPower)),
+  Area     = factor(levels(df$Area)[1],     levels = levels(df$Area)),
+  Exposure = 1.0
+)
+
+baseline_freq <- predict(model_nb,    newdata = baseline_df, type = "response")
+baseline_sev  <- predict(model_gamma, newdata = baseline_df, type = "response")
+baseline_premium <- as.numeric(baseline_freq * baseline_sev)
+
+df$TariffFactor <- df$PurePremium / baseline_premium
+
+head(df[, c("IDpol", "TariffFactor")])
+```
+
+# Conclusiones
+
+* **Adecuación del modelo de frecuencia.** El modelo Poisson es apropiado para la frecuencia cuando la varianza es similar a la media. En la cartera simulada se observa que la relación varianza/media es cercana a 1; aunque también probamos un modelo de Binomial Negativa, el Poisson ofrece un AIC ligeramente menor, por lo que no se justifica la complejidad adicional. Al trabajar con datos reales conviene comparar ambos modelos y escoger el de menor AIC.
+* **Sobredispersión y diagnóstico.** Para evaluar la sobredispersión calculamos la varianza/media de la frecuencia y la devianza por grado de libertad. Si estos indicadores fueran mucho mayores que uno, la Binomial Negativa o incluso modelos más flexibles serían necesarios.
+* **Tratamiento de la severidad.** El modelo Gamma aplicado a la severidad es sensible a los siniestros extremos; al recortar las reclamaciones por encima del percentil 95 se obtiene un modelo más robusto con menor AIC. En un análisis real se podrían modelar las pérdidas grandes con un submodelo específico.
+* **Cálculo de la prima pura.** La prima pura se obtiene multiplicando frecuencia y severidad predichas. En los segmentos con conductores más jóvenes y áreas urbanas la prima es mayor, y disminuye en los segmentos de menor riesgo.
+* **Secuencia lógica.** El orden de los pasos (simulación/carga de datos, modelado de frecuencia, modelado de severidad y cálculo de la prima) permite identificar y tratar separadamente los factores que influyen en el número de siniestros y en su coste medio.
+
+# Preguntas de práctica para los alumnos
+
+5 preguntas sencillas que requieren pequeños cambios de código, siguiendo la misma lógica de los ejemplos anteriores:
+
+1. **Reemplazar las variables de autos por las variables que investigaste en la práctica 1.** Por ejemplo, si considero la variable `Genero`: simular una nueva variable categórica con valores `Hombre` y `Mujer`, suponiendo que los hombres tienen mayor frecuencia de siniestro (supuesto libre).
+2. **Incorporar las variables al modelo de frecuencia.** Por ejemplo, incluir la variable `Genero` en el GLM Poisson de frecuencia, tomando como categoría de referencia a los hombres (`relevel(Genero, ref = "Hombre")`).
+3. **Visualizar las tasas por variable.** Crear una gráfica de barras mostrando la tasa de frecuencia para `Hombre` vs `Mujer` con intervalos de confianza usando `ggplot2`.
+4. **Incorporar las variables al modelo de severidad.** Agregar `Genero` como predictor en el modelo de severidad (Gamma) y comparar el coeficiente con la intuición esperada.
+5. **Tarifa multiplicativa.** Extender la tabla de factores multiplicativos para que muestre también los factores relativos de las variables que eligieron.
+
+Estas preguntas están pensadas para que los alumnos reutilicen el mismo código del cuaderno, modificando solo los detalles necesarios (variables, referencias y visualizaciones).
+
+# Información de la sesión
+
+```{r session_info}
+sessionInfo()
+```
