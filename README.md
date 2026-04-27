@@ -13,4 +13,4 @@ practica_02: entrega 15/04/2026
 
 ## Entgable 3:
 
-practica_03: entrega 02/05/2026
+practica_03: entrega 03/05/2026
